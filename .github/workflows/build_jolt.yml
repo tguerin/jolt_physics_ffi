@@ -1,0 +1,166 @@
+name: Build JoltPhysics Prebuilt Libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      jolt_version:
+        description: 'JoltPhysics version/tag (e.g., v5.5.0)'
+        required: true
+        default: 'v5.5.0'
+        type: string
+      platforms:
+        description: 'Platforms (android, ios, macos, windows, wasm, linux) or "all"'
+        required: true
+        default: 'all'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: android
+            arch: arm64-v8a
+            abi: arm64-v8a
+          - os: macos-latest
+            platform: ios
+            arch: arm64
+            sdk: iphoneos
+          - os: macos-latest
+            platform: ios-sim
+            arch: "x86_64;arm64"
+            sdk: iphonesimulator
+          - os: macos-latest
+            platform: macos
+            arch: "x86_64;arm64"
+            sdk: macosx
+          - os: windows-latest
+            platform: windows
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: ubuntu-latest
+            platform: wasm
+            arch: wasm32
+
+    steps:
+      - name: Checkout repository
+        if: github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.platform)
+        uses: actions/checkout@v4
+
+      - name: Checkout JoltPhysics
+        if: github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.platform)
+        shell: bash
+        run: git clone --depth 1 --branch ${{ github.event.inputs.jolt_version }} https://github.com/jrouwe/JoltPhysics.git jolt-source
+
+      # --- ANDROID ---
+      - name: Setup Android NDK
+        if: matrix.platform == 'android' && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, 'android'))
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+
+      - name: Build Android
+        if: matrix.platform == 'android' && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, 'android'))
+        run: |
+          cmake -S jolt-source/Build -B build_dir \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=${{ matrix.abi }} \
+                -DANDROID_PLATFORM=android-21 \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DJOLT_BUILD_SAMPLES=OFF -DJOLT_BUILD_TESTS=OFF -DJOLT_LIBRARY_TYPE=SHARED
+          cmake --build build_dir --config Release --target Jolt
+          mkdir -p artifacts/android
+          find build_dir -name "libJolt.so" -exec cp {} artifacts/android/libjolt_${{ matrix.arch }}.so \;
+
+      # --- APPLE (iOS & macOS) ---
+      - name: Build Apple Platforms
+        if: (matrix.platform == 'ios' || matrix.platform == 'ios-sim' || matrix.platform == 'macos') && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.platform))
+        run: |
+          cmake -S jolt-source/Build -B build_dir \
+                -DCMAKE_SYSTEM_NAME=${{ matrix.platform == 'macos' && 'Darwin' || 'iOS' }} \
+                -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" \
+                -DCMAKE_OSX_SYSROOT=${{ matrix.sdk }} \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DJOLT_BUILD_SAMPLES=OFF -DJOLT_BUILD_TESTS=OFF
+          cmake --build build_dir --config Release --target Jolt
+          mkdir -p artifacts/${{ matrix.platform }}
+          find build_dir -name "libJolt.a" -exec cp {} artifacts/${{ matrix.platform }}/libjolt_${{ matrix.platform }}.a \;
+
+      # --- WINDOWS ---
+      - name: Build Windows
+        if: matrix.platform == 'windows' && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, 'windows'))
+        shell: pwsh
+        run: |
+          cmake -S jolt-source/Build -B build_dir -G "Visual Studio 17 2022" -A x64 `
+                -DCMAKE_BUILD_TYPE=Release -DJOLT_BUILD_SAMPLES=OFF -DJOLT_BUILD_TESTS=OFF `
+                -DJOLT_LIBRARY_TYPE=SHARED
+          cmake --build build_dir --config Release --target Jolt
+          New-Item -ItemType Directory -Force -Path "artifacts/windows"
+          # Recursive search for the DLL and LIB files to handle MSVC subfolder logic
+          Get-ChildItem -Path build_dir -Filter "Jolt.dll" -Recurse | Copy-Item -Destination "artifacts/windows/jolt_x64.dll"
+          Get-ChildItem -Path build_dir -Filter "Jolt.lib" -Recurse | Copy-Item -Destination "artifacts/windows/jolt_x64.lib"
+
+      # --- LINUX ---
+      - name: Build Linux
+        if: matrix.platform == 'linux' && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, 'linux'))
+        run: |
+          cmake -S jolt-source/Build -B build_dir \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DJOLT_BUILD_SAMPLES=OFF -DJOLT_BUILD_TESTS=OFF \
+                -DJOLT_LIBRARY_TYPE=SHARED
+          cmake --build build_dir --config Release --target Jolt
+          mkdir -p artifacts/linux
+          find build_dir -name "libJolt.so" -exec cp {} artifacts/linux/libjolt_linux_x64.so \;
+
+      # --- WASM ---
+      - name: Setup Emscripten
+        if: matrix.platform == 'wasm' && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, 'wasm'))
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build WASM
+        if: matrix.platform == 'wasm' && (github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, 'wasm'))
+        run: |
+          emcmake cmake -S jolt-source/Build -B build_dir -DCMAKE_BUILD_TYPE=Release \
+                        -DJOLT_BUILD_SAMPLES=OFF -DJOLT_BUILD_TESTS=OFF \
+                        -DCMAKE_CXX_FLAGS="-pthread -sUSE_PTHREADS=1"
+          emmake cmake --build build_dir --config Release --target Jolt
+          STATIC_LIB=$(find build_dir -name "libJolt.a" | head -n 1)
+          emcc $STATIC_LIB -o jolt_c.wasm -sUSE_PTHREADS=1 -sPTHREAD_POOL_SIZE=4 -sEXPORTED_FUNCTIONS='["_malloc","_free"]' --no-entry
+          mkdir -p artifacts/wasm
+          cp jolt_c.wasm artifacts/wasm/jolt_c.wasm
+
+      - name: Upload Artifacts
+        if: github.event.inputs.platforms == 'all' || contains(github.event.inputs.platforms, matrix.platform)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolt-${{ matrix.platform }}-${{ matrix.arch == 'x86_64;arm64' && 'universal' || matrix.arch }}
+          path: artifacts/
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/**/*
+          tag_name: jolt-${{ github.event.inputs.jolt_version }}-${{ github.run_id }}
+          name: JoltPhysics ${{ github.event.inputs.jolt_version }} Prebuilt Libraries
+          body: "JoltPhysics prebuilt binaries for Flutter FFI."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

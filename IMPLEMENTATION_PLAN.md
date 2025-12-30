@@ -157,11 +157,18 @@ Before proceeding, verify and commit:
 
 ### 2. Create GitHub Actions Workflow (`.github/workflows/build_jolt.yml`)
 
-Create a GitHub Actions workflow that automatically builds JoltPhysics for all platforms using matrix compilation. This workflow will:
+Create a GitHub Actions workflow that builds JoltPhysics for all platforms using matrix compilation. This workflow will:
 
-1. Download the latest JoltPhysics source
-2. Build for each platform/architecture in parallel
-3. Upload artifacts to GitHub Releases **in the same repository** (not a separate repo)
+1. Accept JoltPhysics version/tag as input (manual trigger)
+2. Download the specified JoltPhysics version
+3. Build for each platform/architecture in parallel
+4. Organize assets by JoltPhysics version in release paths
+5. Upload artifacts to GitHub Releases **in the same repository** (not a separate repo)
+
+**Key Features:**
+- **Version-based**: Each JoltPhysics version gets its own release (e.g., `jolt-v5.5.0`)
+- **Manual trigger**: Choose which JoltPhysics version to build
+- **Versioned paths**: Assets organized by version for multiple FFI plugin versions
 
 **Workflow Structure:**
 
@@ -169,12 +176,13 @@ Create a GitHub Actions workflow that automatically builds JoltPhysics for all p
 name: Build JoltPhysics Prebuilt Libraries
 
 on:
-  workflow_dispatch:  # Manual trigger
-  push:
-    tags:
-      - 'v*'  # Trigger on version tags
-  schedule:
-    - cron: '0 0 * * 0'  # Weekly build to get latest Jolt
+  workflow_dispatch:  # Manual trigger with version selection
+    inputs:
+      jolt_version:
+        description: 'JoltPhysics version/tag to build (e.g., v5.5.0 or master)'
+        required: true
+        default: 'v5.5.0'
+        type: string
 
 jobs:
   build:
@@ -387,17 +395,24 @@ jobs:
 **Key Features:**
 
 - **Matrix Strategy**: Builds all platforms in parallel
-- **Latest Jolt**: Downloads latest JoltPhysics on each run
-- **Version Tracking**: Saves Jolt version to `jolt_version.txt`
-- **Automatic Releases**: Creates GitHub Release on version tags
+- **Version Selection**: Choose which JoltPhysics version to build (e.g., v5.5.0)
+- **Versioned Releases**: Each JoltPhysics version gets its own release tag (e.g., `jolt-v5.5.0`)
+- **Versioned Paths**: Assets organized by version for multiple FFI plugin versions
 - **Artifact Retention**: Keeps artifacts for 90 days
 - **WASM Multithreading**: Builds with pthread support for web workers
 
 **Triggering the Workflow:**
 
 - **Manual**: Use "Run workflow" button in GitHub Actions
-- **On Tag**: Push a tag like `v1.0.0` to trigger release
-- **Scheduled**: Weekly build to get latest JoltPhysics
+  - Select JoltPhysics version/tag (e.g., `v5.5.0`, `v5.4.0`, or `master`)
+  - Workflow builds that specific version
+  - Creates release with tag `jolt-<version>` (e.g., `jolt-v5.5.0`)
+
+**Release Structure:**
+
+- Release tag: `jolt-v5.5.0` (for JoltPhysics v5.5.0)
+- Assets: All libraries for that JoltPhysics version
+- Multiple versions: Can have `jolt-v5.5.0`, `jolt-v5.4.0`, etc. simultaneously
 
 **CHECKPOINT 2 - Verify GitHub Actions Workflow:**
 
@@ -515,9 +530,12 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 // GitHub repository configuration - uses same repo as plugin
 // The repository is determined from package name or can be configured
 // For same repo: use 'owner/repo' from current repository
-const String githubReleaseTag = 'v1.0.0'; // or 'latest'
-// Base URL will be constructed from current repo context
-// In practice, you can read from pubspec.yaml or git remote
+
+// JoltPhysics version to use - set this to match the version you want
+// Change this to use a different JoltPhysics version (e.g., 'v5.5.0', 'v5.4.0', etc.)
+const String joltVersion = 'v5.5.0';
+// Release tag format: jolt-<version> (e.g., jolt-v5.5.0)
+const String githubReleaseTag = 'jolt-$joltVersion';
 
 void main(List<String> args) async {
   await build(args, (context, target) async {
@@ -689,7 +707,8 @@ Future<File> buildCShim(BuildContext context, Target target, File joltLib) async
 1. **In the Same GitHub Repository** (as Release Assets):
    - Prebuilt libraries are stored in **the same repository** as the FFI plugin
    - GitHub Actions workflow automatically builds and uploads to releases
-   - Create GitHub Release (e.g., `v1.0.0`) - workflow does this automatically on tag push
+   - Each JoltPhysics version gets its own release tag: `jolt-<version>` (e.g., `jolt-v5.5.0`)
+   - Trigger workflow manually and specify JoltPhysics version to build
    - Library files are uploaded as release assets with this naming:
      - `libjolt_android_arm64-v8a.a`
      - `libjolt_android_armeabi-v7a.a`
@@ -706,7 +725,9 @@ Future<File> buildCShim(BuildContext context, Target target, File joltLib) async
 
 2. **During Build** (automatic download):
    - Build hook downloads from: **the same repository's** releases
-   - URL format: `https://github.com/<owner>/<repo>/releases/download/v1.0.0/libjolt_<platform>_<arch>.<ext>`
+   - URL format: `https://github.com/<owner>/<repo>/releases/download/jolt-<version>/libjolt_<platform>_<arch>.<ext>`
+   - Example: `https://github.com/owner/repo/releases/download/jolt-v5.5.0/libjolt_android_arm64-v8a.a`
+   - JoltPhysics version specified in `hook/build.dart` (`joltVersion` constant)
    - Repository is auto-detected from git remote
    - Libraries cached in: `.dart_tool/jolt_cache/` (gitignored)
 
@@ -1054,7 +1075,8 @@ external class JoltPhysicsWasm {
 1. **In the Same GitHub Repository** (as Release Assets):
    - Prebuilt libraries are stored in **the same repository** as the FFI plugin
    - GitHub Actions workflow automatically builds and uploads to releases
-   - Create GitHub Release (e.g., `v1.0.0`) - workflow does this automatically on tag push
+   - Each JoltPhysics version gets its own release tag: `jolt-<version>` (e.g., `jolt-v5.5.0`)
+   - Trigger workflow manually and specify JoltPhysics version to build
    - Library files are uploaded as release assets with this naming:
      - `libjolt_android_arm64-v8a.a`
      - `libjolt_android_armeabi-v7a.a`
@@ -1071,7 +1093,9 @@ external class JoltPhysicsWasm {
 
 2. **During Build** (automatic download):
    - Build hook downloads from: **the same repository's** releases
-   - URL format: `https://github.com/<owner>/<repo>/releases/download/v1.0.0/libjolt_<platform>_<arch>.<ext>`
+   - URL format: `https://github.com/<owner>/<repo>/releases/download/jolt-<version>/libjolt_<platform>_<arch>.<ext>`
+   - Example: `https://github.com/owner/repo/releases/download/jolt-v5.5.0/libjolt_android_arm64-v8a.a`
+   - JoltPhysics version specified in `hook/build.dart` (`joltVersion` constant)
    - Repository is auto-detected from git remote
    - Libraries cached in: `.dart_tool/jolt_cache/` (gitignored)
 
@@ -1216,7 +1240,8 @@ ffigen:
 - Host as GitHub Release assets in the same repo
 - Use consistent naming: `libjolt_<platform>_<arch>.<ext>`
 - Repository is auto-detected from git remote (no manual configuration needed)
-- Only need to set `githubReleaseTag` in `hook/build.dart` (or use 'latest')
+- Each JoltPhysics version gets its own release tag: `jolt-<version>` (e.g., `jolt-v5.5.0`)
+- Set `joltVersion` in `hook/build.dart` to specify which JoltPhysics version to use
 
 ## Integration with Newton
 
